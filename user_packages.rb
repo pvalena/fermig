@@ -23,7 +23,7 @@ while page do
   end
 end
 
-packages = `#{PACKAGES}`
+packages = `#{PACKAGES} #{ARGV.grep(/^\-i=./).last}`
 exit $?.to_i if $?.to_i != 0
 
 packages = packages.lines

@@ -12,18 +12,22 @@ options = {}
 options[:interactive] = ARGV.include? '-i'
 options[:build] = ARGV.include? '-b'
 options[:user] = ARGV.include? '-u'
+options[:realbuild] = ARGV.include? '-r'
+options[:target] = ARGV.grep(/^\-t=./).last
+options[:ignore] = ARGV.grep(/^\-i=./).last
 
 ARGV.clear
 
 problematic_packages = []
 
-packages = options[:user] ? `#{USER_PACKAGES}` : `#{PACKAGES}`
-exit $?.to_i if $?.to_i != 0
+packages = options[:user] ? `#{USER_PACKAGES} #{options[:ignore]}` : `#{PACKAGES} #{options[:ignore]}`
+
+exit $?.exitstatus unless $?.exitstatus.zero?
+
+options[:target] = "--target #{options[:target][3..-1]}" if options[:target]
 
 packages.lines do |package|
   package.chomp!
-
-  print "Converting #{package} ... "
 
   revert = false
   quit = false
@@ -33,16 +37,26 @@ packages.lines do |package|
   `fedpkg clone #{package}` unless File.exist? package_dir
 
   Dir.chdir package_dir do
-    `git checkout master`
-    `git pull`
-    git_log = `git log --oneline -10`.chomp
+    `git stash 2>&1`
+    `git checkout master 2>&1`
+    `git pull 2>&1`
+    git_log = `git log --oneline -100`.chomp
 
-    unless git_log =~ /#{COMMIT_MESSAGE}/
+    puts
+
+    if git_log =~ /#{COMMIT_MESSAGE}/
+      puts "Already converted: #{package}"
+    else
+      puts "Converting #{package} ... "
+
       `#{UPDATE} "#{package}.spec"`
 
       `git add -u`
       `git commit -m "#{COMMIT_MESSAGE}"`
 
+    end
+
+    if `git status` =~ /Your branch is ahead of 'origin\/master' by 1 commit/
       if options[:interactive]
         system 'git show HEAD'
 
@@ -58,14 +72,21 @@ packages.lines do |package|
         git_hash = git_log[/^(.*?) .*/, 1]
         `git reset --hard #{git_hash}`
       elsif options[:build]
-        puts '', 'Issuing build:'
-        `git push`
-        puts `fedpkg build --nowait --scratch`
+        puts 'Issuing scratch build:'
+        puts `fedpkg build --scratch --srpm #{options[:target]}`
+        puts " => #{($?.exitstatus.zero? ? 'Succeed' : 'Failed')}"
+
+        if $?.exitstatus.zero? && options[:realbuild]
+          puts 'Issuing real build:'
+          `fedpkg push`
+          puts `fedpkg build #{options[:target]}`
+          puts " => #{($?.exitstatus.zero? ? 'Succeeded' : 'Failed')}"
+        end
       else
-        puts "done" unless options[:interactive]
+        puts " => Done" unless options[:interactive]
       end
     else
-      puts "skipped"
+      puts `git status`, ' => Skipped'
     end
   end
 
